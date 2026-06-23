@@ -15,17 +15,24 @@
     }
     textarea { resize: vertical; min-height: 100px; }
     button {
-      align-self: flex-start; background: #0F2747; color: #fff;
-      border: none; border-radius: 6px; padding: .6rem 1.25rem;
-      font-size: 1rem; cursor: pointer;
+      background: #0F2747; color: #fff; border: none;
+      border-radius: 6px; padding: .6rem 1.25rem; font-size: 1rem; cursor: pointer;
     }
-    button:hover { opacity: .85; }
-    #status { font-size: .875rem; color: #c00; min-height: 1.25rem; }
+    button:hover:not(:disabled) { opacity: .85; }
+    button:disabled { opacity: .5; cursor: default; }
+    form button { align-self: flex-start; }
+    #post-status { font-size: .875rem; color: #c00; min-height: 1.25rem; }
     #notes { display: flex; flex-direction: column; gap: 1rem; }
     article { border: 1px solid #e5e5e5; border-radius: 8px; padding: 1rem; }
     article h2 { font-size: 1.1rem; margin-bottom: .4rem; }
     article p { color: #444; line-height: 1.5; white-space: pre-wrap; }
-    time { display: block; font-size: .75rem; color: #999; margin-top: .5rem; }
+    .note-footer { display: flex; align-items: center; gap: .75rem; margin-top: .6rem; flex-wrap: wrap; }
+    time { font-size: .75rem; color: #999; }
+    .share-btn {
+      background: none; color: #0F2747; border: 1px solid #0F2747;
+      border-radius: 4px; padding: .25rem .65rem; font-size: .75rem; cursor: pointer;
+    }
+    .share-btn:hover:not(:disabled) { background: #0F2747; color: #fff; }
     .empty { color: #999; font-style: italic; }
   </style>
 </head>
@@ -36,7 +43,7 @@
     <input id="title" type="text" placeholder="Title" required />
     <textarea id="content" placeholder="Write a note…"></textarea>
     <button type="submit">Post note</button>
-    <span id="status"></span>
+    <span id="post-status"></span>
   </form>
 
   <div id="notes"></div>
@@ -46,7 +53,8 @@
     const { createClient } = window.supabase;
     const db = createClient('%%SUPABASE_URL%%', '%%SUPABASE_ANON_KEY%%');
 
-    const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const esc = s => String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
     async function loadNotes() {
       const { data, error } = await db
@@ -60,13 +68,18 @@
         <article>
           <h2>${esc(n.title)}</h2>
           ${n.content ? `<p>${esc(n.content)}</p>` : ''}
-          <time>${new Date(n.created_at).toLocaleString()}</time>
+          <div class="note-footer">
+            <time>${new Date(n.created_at).toLocaleString()}</time>
+            <button class="share-btn"
+              data-title="${esc(n.title)}"
+              data-content="${esc(n.content || '')}">Share via email</button>
+          </div>
         </article>`).join('');
     }
 
     document.getElementById('form').addEventListener('submit', async e => {
       e.preventDefault();
-      const status = document.getElementById('status');
+      const status = document.getElementById('post-status');
       const title = document.getElementById('title').value.trim();
       const content = document.getElementById('content').value.trim();
       status.textContent = '';
@@ -79,6 +92,37 @@
       if (error) { status.textContent = 'Error: ' + error.message; return; }
       e.target.reset();
       await loadNotes();
+    });
+
+    document.getElementById('notes').addEventListener('click', async e => {
+      const btn = e.target.closest('.share-btn');
+      if (!btn) return;
+
+      const to = prompt('Recipient email address:');
+      if (!to || !to.trim()) return;
+
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+
+      try {
+        const res = await fetch('/api/share', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: to.trim(),
+            title: btn.dataset.title,
+            content: btn.dataset.content,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Send failed');
+        btn.textContent = 'Sent ✓';
+        setTimeout(() => { btn.disabled = false; btn.textContent = 'Share via email'; }, 3000);
+      } catch (err) {
+        alert('Could not send email: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = 'Share via email';
+      }
     });
 
     loadNotes();
