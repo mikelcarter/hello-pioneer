@@ -3,7 +3,7 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { to, title, content } = req.body ?? {};
+  const { to, title, content, noteId } = req.body ?? {};
 
   if (!to || typeof to !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
     return res.status(400).json({ error: 'A valid recipient email address is required.' });
@@ -42,7 +42,6 @@ module.exports = async function handler(req, res) {
     <tr><td align="center">
       <table width="100%" cellpadding="0" cellspacing="0"
         style="max-width:560px;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);">
-
         <tr>
           <td style="background:#0F2747;padding:28px 32px;">
             <p style="margin:0;color:#C9A227;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">
@@ -53,7 +52,6 @@ module.exports = async function handler(req, res) {
             </h1>
           </td>
         </tr>
-
         <tr>
           <td style="padding:32px;">
             <h2 style="margin:0 0 14px;color:#0F2747;font-size:19px;font-weight:600;">${esc(title)}</h2>
@@ -65,7 +63,6 @@ module.exports = async function handler(req, res) {
             </a>
           </td>
         </tr>
-
         <tr>
           <td style="padding:16px 32px 24px;border-top:1px solid #e8e8e8;">
             <p style="margin:0;color:#bbb;font-size:11px;">
@@ -73,12 +70,14 @@ module.exports = async function handler(req, res) {
             </p>
           </td>
         </tr>
-
       </table>
     </td></tr>
   </table>
 </body>
 </html>`;
+
+  // Include note_id as a Resend tag so the webhook can recover it without a DB lookup
+  const tags = noteId ? [{ name: 'note_id', value: noteId }] : undefined;
 
   const r = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -91,6 +90,7 @@ module.exports = async function handler(req, res) {
       to: [to],
       subject: `Shared note: ${title}`,
       html,
+      ...(tags && { tags }),
     }),
   });
 
@@ -98,6 +98,25 @@ module.exports = async function handler(req, res) {
 
   if (!r.ok) {
     return res.status(r.status).json({ error: result.message ?? 'Failed to send email.' });
+  }
+
+  // Record the sent event — best-effort, don't fail the response if this errors
+  if (result.id) {
+    await fetch(`${process.env.SUPABASE_URL}/rest/v1/email_events`, {
+      method: 'POST',
+      headers: {
+        apikey: process.env.SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        message_id: result.id,
+        note_id: noteId ?? null,
+        recipient: to,
+        event_type: 'sent',
+      }),
+    }).catch(() => {});
   }
 
   return res.status(200).json({ success: true, id: result.id });

@@ -25,7 +25,7 @@
     #notes { display: flex; flex-direction: column; gap: 1rem; }
     article { border: 1px solid #e5e5e5; border-radius: 8px; padding: 1rem; }
     article h2 { font-size: 1.1rem; margin-bottom: .4rem; }
-    article p { color: #444; line-height: 1.5; white-space: pre-wrap; }
+    article > p { color: #444; line-height: 1.5; white-space: pre-wrap; margin-bottom: .25rem; }
     .note-footer { display: flex; align-items: center; gap: .75rem; margin-top: .6rem; flex-wrap: wrap; }
     time { font-size: .75rem; color: #999; }
     .share-btn {
@@ -33,6 +33,20 @@
       border-radius: 4px; padding: .25rem .65rem; font-size: .75rem; cursor: pointer;
     }
     .share-btn:hover:not(:disabled) { background: #0F2747; color: #fff; }
+    .activity {
+      list-style: none; margin-top: .75rem;
+      background: #f8f9fa; border: 1px solid #ebebeb; border-radius: 6px;
+      padding: .5rem .75rem; display: flex; flex-direction: column; gap: .35rem;
+    }
+    .activity li {
+      display: grid;
+      grid-template-columns: 1rem 1fr auto auto;
+      align-items: center; gap: .4rem; font-size: .76rem;
+    }
+    .ev-icon { text-align: center; font-size: .8rem; }
+    .ev-addr { color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ev-badge { font-size: .65rem; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+    .ev-time { color: #bbb; white-space: nowrap; font-size: .7rem; }
     .empty { color: #999; font-style: italic; }
   </style>
 </head>
@@ -56,25 +70,74 @@
     const esc = s => String(s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+    const STATUS = {
+      sent:      { icon: '○', color: '#aaa',    label: 'sent' },
+      delivered: { icon: '✓', color: '#16a34a', label: 'delivered' },
+      opened:    { icon: '◉', color: '#2563eb', label: 'opened' },
+      clicked:   { icon: '⊕', color: '#7c3aed', label: 'clicked' },
+      bounced:   { icon: '✗', color: '#dc2626', label: 'bounced' },
+      complained:{ icon: '!', color: '#ea580c', label: 'complained' },
+    };
+
+    function reltime(ts) {
+      const s = Math.round((Date.now() - new Date(ts)) / 1000);
+      if (s < 60)    return 'just now';
+      if (s < 3600)  return `${Math.floor(s / 60)}m ago`;
+      if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+      return `${Math.floor(s / 86400)}d ago`;
+    }
+
     async function loadNotes() {
       const { data, error } = await db
-        .from('notes')
-        .select('*')
-        .order('created_at', { ascending: false });
+        .from('notes').select('*').order('created_at', { ascending: false });
+
       const el = document.getElementById('notes');
       if (error) { el.innerHTML = `<p class="empty">Error loading notes: ${esc(error.message)}</p>`; return; }
       if (!data.length) { el.innerHTML = `<p class="empty">No notes yet. Post one above.</p>`; return; }
-      el.innerHTML = data.map(n => `
-        <article>
-          <h2>${esc(n.title)}</h2>
-          ${n.content ? `<p>${esc(n.content)}</p>` : ''}
-          <div class="note-footer">
-            <time>${new Date(n.created_at).toLocaleString()}</time>
-            <button class="share-btn"
-              data-title="${esc(n.title)}"
-              data-content="${esc(n.content || '')}">Share via email</button>
-          </div>
-        </article>`).join('');
+
+      // Fetch all email events for displayed notes in one query
+      const { data: evts = [] } = await db
+        .from('email_events')
+        .select('note_id, message_id, recipient, event_type, created_at')
+        .in('note_id', data.map(n => n.id))
+        .order('created_at', { ascending: false });
+
+      // Latest event per (note_id, recipient) — already sorted desc so first win counts
+      const byNote = {};
+      for (const ev of evts) {
+        if (!byNote[ev.note_id]) byNote[ev.note_id] = {};
+        if (!byNote[ev.note_id][ev.recipient]) byNote[ev.note_id][ev.recipient] = ev;
+      }
+
+      el.innerHTML = data.map(n => {
+        const latest = byNote[n.id] ? Object.values(byNote[n.id]) : [];
+        latest.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+        const feedHtml = latest.length ? `
+          <ul class="activity">${latest.map(ev => {
+            const s = STATUS[ev.event_type] || STATUS.sent;
+            return `<li>
+              <span class="ev-icon" style="color:${s.color}">${s.icon}</span>
+              <span class="ev-addr">${esc(ev.recipient)}</span>
+              <span class="ev-badge" style="color:${s.color}">${s.label}</span>
+              <span class="ev-time">${reltime(ev.created_at)}</span>
+            </li>`;
+          }).join('')}</ul>` : '';
+
+        return `
+          <article>
+            <h2>${esc(n.title)}</h2>
+            ${n.content ? `<p>${esc(n.content)}</p>` : ''}
+            <div class="note-footer">
+              <time>${new Date(n.created_at).toLocaleString()}</time>
+              <button class="share-btn"
+                data-id="${n.id}"
+                data-title="${esc(n.title)}"
+                data-content="${esc(n.content || '')}">Share via email</button>
+            </div>
+            ${feedHtml}
+          </article>`;
+      }).join('');
     }
 
     document.getElementById('form').addEventListener('submit', async e => {
@@ -110,14 +173,19 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             to: to.trim(),
+            noteId: btn.dataset.id,
             title: btn.dataset.title,
             content: btn.dataset.content,
           }),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Send failed');
+        const payload = await res.json();
+        if (!res.ok) throw new Error(payload.error || 'Send failed');
         btn.textContent = 'Sent ✓';
-        setTimeout(() => { btn.disabled = false; btn.textContent = 'Share via email'; }, 3000);
+        setTimeout(async () => {
+          btn.disabled = false;
+          btn.textContent = 'Share via email';
+          await loadNotes(); // refresh activity feed
+        }, 2000);
       } catch (err) {
         alert('Could not send email: ' + err.message);
         btn.disabled = false;
