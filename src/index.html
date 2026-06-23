@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pioneer Notes</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #111; }
+    h1 { font-size: 1.75rem; margin-bottom: 1.5rem; }
+    form { display: flex; flex-direction: column; gap: .75rem; margin-bottom: 2rem; }
+    input, textarea {
+      border: 1px solid #ccc; border-radius: 6px;
+      padding: .6rem .8rem; font-size: 1rem; font-family: inherit; width: 100%;
+    }
+    textarea { resize: vertical; min-height: 100px; }
+    button {
+      align-self: flex-start; background: #0F2747; color: #fff;
+      border: none; border-radius: 6px; padding: .6rem 1.25rem;
+      font-size: 1rem; cursor: pointer;
+    }
+    button:hover { opacity: .85; }
+    #status { font-size: .875rem; color: #c00; min-height: 1.25rem; }
+    #notes { display: flex; flex-direction: column; gap: 1rem; }
+    article { border: 1px solid #e5e5e5; border-radius: 8px; padding: 1rem; }
+    article h2 { font-size: 1.1rem; margin-bottom: .4rem; }
+    article p { color: #444; line-height: 1.5; white-space: pre-wrap; }
+    time { display: block; font-size: .75rem; color: #999; margin-top: .5rem; }
+    .empty { color: #999; font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>Pioneer Notes</h1>
+
+  <form id="form">
+    <input id="title" type="text" placeholder="Title" required />
+    <textarea id="content" placeholder="Write a note…"></textarea>
+    <button type="submit">Post note</button>
+    <span id="status"></span>
+  </form>
+
+  <div id="notes"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const { createClient } = window.supabase;
+    const db = createClient('%%SUPABASE_URL%%', '%%SUPABASE_ANON_KEY%%');
+
+    const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    async function loadNotes() {
+      const { data, error } = await db
+        .from('notes')
+        .select('*')
+        .order('created_at', { ascending: false });
+      const el = document.getElementById('notes');
+      if (error) { el.innerHTML = `<p class="empty">Error loading notes: ${esc(error.message)}</p>`; return; }
+      if (!data.length) { el.innerHTML = `<p class="empty">No notes yet. Post one above.</p>`; return; }
+      el.innerHTML = data.map(n => `
+        <article>
+          <h2>${esc(n.title)}</h2>
+          ${n.content ? `<p>${esc(n.content)}</p>` : ''}
+          <time>${new Date(n.created_at).toLocaleString()}</time>
+        </article>`).join('');
+    }
+
+    document.getElementById('form').addEventListener('submit', async e => {
+      e.preventDefault();
+      const status = document.getElementById('status');
+      const title = document.getElementById('title').value.trim();
+      const content = document.getElementById('content').value.trim();
+      status.textContent = '';
+      const btn = e.target.querySelector('button');
+      btn.disabled = true;
+      btn.textContent = 'Posting…';
+      const { error } = await db.from('notes').insert({ title, content: content || null });
+      btn.disabled = false;
+      btn.textContent = 'Post note';
+      if (error) { status.textContent = 'Error: ' + error.message; return; }
+      e.target.reset();
+      await loadNotes();
+    });
+
+    loadNotes();
+  </script>
+</body>
+</html>

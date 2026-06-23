@@ -1,0 +1,7 @@
+{
+  "name": "hello-pioneer",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "node build.mjs"
+  }
+}
